@@ -1,6 +1,4 @@
-========================================================
- RAVAGE-CREWS — Page de gestion de crew (NUI)
-========================================================
+
 
 CONTENU
   ravage-crews/            -> le resource (à mettre dans resources/)
