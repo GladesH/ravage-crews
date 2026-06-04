@@ -1,4 +1,6 @@
 -- =========================================================
+--  crew_ravage.lua  —  Pont RAVAGE pour le crew de hrs_base_building
+-- ---------------------------------------------------------
 --  INSTALLATION :
 --   1) Place ce fichier dans le dossier de hrs_base_building.
 --   2) Dans hrs_base_building/fxmanifest.lua, ajoute-le APRÈS client.lua :
@@ -8,27 +10,24 @@
 --          }
 --   3) Démarre 'ravage-crews' AVANT 'hrs_base_building' dans server.cfg.
 --
---  Ce fichier remplace tout l'ancien flux de menu crew (qb-menu / qb-input /
---  ox_lib). Tu n'as plus besoin des remplacements exports['qb-menu']/qb-input.
---  Les anciens events 'hrs_base_building:crew:*' deviennent inutiles (inoffensifs).
---  La commande /crew ouvre désormais la page RAVAGE (override de OpenCrewMenu).
 -- =========================================================
 
--- Events serveur réels du base building (ne pas modifier sauf si renommés)
+local STOCK_PERMISSION = "canInteract"
+local ACL_PERMISSION = "canManageMembers"
+
 local CREW_EVENTS = {
-    invite       = 'hrs_base_building:addToCrew',       -- arg: serverId
-    removeMember = 'hrs_base_building:removeFromCrew',  -- arg: identifier
-    giveOwner    = 'hrs_base_building:updateCrewOwner', -- arg: identifier
-    savePerms    = 'hrs_base_building:updateCrewPerms', -- args: identifier, permsArray
-    rename       = 'hrs_base_building:updateCrewName',  -- arg: nouveau nom
+    invite       = 'hrs_base_building:addToCrew',
+    removeMember = 'hrs_base_building:removeFromCrew',
+    giveOwner    = 'hrs_base_building:updateCrewOwner',
+    savePerms    = 'hrs_base_building:updateCrewPerms',
+    rename       = 'hrs_base_building:updateCrewName',
     delete       = 'hrs_base_building:deleteCrew',
     leave        = 'hrs_base_building:leaveCrew',
     create       = 'hrs_base_building:createCrew',
-    acceptInvite = 'hrs_base_building:acceptCrew',      -- arg: crewId
+    acceptInvite = 'hrs_base_building:acceptCrew',
 }
 
 local function canPerm(permType)
-    -- hasCrewPermission(myIdentifier, otherIdentifier(nil), permissionType)
     return hasCrewPermission(identifier, nil, permType) and true or false
 end
 
@@ -36,20 +35,20 @@ local function buildCrewPayload()
     local p = { events = CREW_EVENTS, identifier = identifier, hasCrew = (myCrew ~= nil) }
 
     if myCrew then
-        p.isOwner   = (myCrew.owner == identifier)
-        p.maxMembers = Config.maxCrewMembers or nil
-        p.canInvite = canPerm("canInviteMembers")
-        p.canManage = canPerm("canManageMembers")
-        p.canRemove = canPerm("canRemoveMembers")
+        p.isOwner     = (myCrew.owner == identifier)
+        p.maxMembers  = Config.maxCrewMembers or nil
+        p.canInvite   = canPerm("canInviteMembers")
+        p.canManage   = canPerm("canManageMembers")
+        p.canRemove   = canPerm("canRemoveMembers")
+        p.canStocks   = canPerm(STOCK_PERMISSION)
+        p.canChestAcl = canPerm(ACL_PERMISSION)
 
-        -- définitions des permissions (ordre = index utilisé côté serveur)
         local defs = {}
         for i, perm in ipairs(Config.crewPermissions or {}) do
             defs[#defs + 1] = { index = i, label = perm.label_fr or perm.label or ("Permission " .. i) }
         end
         p.permissionDefs = defs
 
-        -- membres
         local members = {}
         for id, m in pairs(myCrew.data or {}) do
             local base  = m.permissions or {}
@@ -71,7 +70,6 @@ local function buildCrewPayload()
         end)
         p.crew = { name = myCrew.label or "CREW", ownerId = myCrew.owner, members = members }
 
-        -- joueurs à proximité (pour inviter)
         local nearby = {}
         if p.canInvite then
             local me       = PlayerId()
@@ -87,7 +85,6 @@ local function buildCrewPayload()
         end
         p.nearbyPlayers = nearby
     else
-        -- pas de crew : liste des invitations
         local invites = {}
         if invitesCrew then
             for id, name in pairs(invitesCrew) do
@@ -101,24 +98,15 @@ local function buildCrewPayload()
     return p
 end
 
--- Override : /crew ouvre la page RAVAGE (la commande existante appelle ce global)
 function OpenCrewMenu()
     exports['ravage-crews']:openCrewPage(buildCrewPayload())
-    -- Re-synchronise l'état réel depuis le serveur (corrige les désyncs
-    -- client/serveur : le serveur renvoie setCrewC -> la page se met à jour).
     TriggerServerEvent('hrs_base_building:getCrewS')
 end
 
--- Sécurité : si la commande n'est pas déjà enregistrée ailleurs
 RegisterCommand("crew", function()
     OpenCrewMenu()
 end, false)
 
--- Rafraîchissement live de la page quand l'état du crew change.
--- Le serveur hrs_base_building broadcast 'setCrewC' / 'setInvitesC' sur TOUTES
--- les actions (create / delete / leave / remove / accept / rename / perms / owner),
--- donc on se contente de re-render la page à chaque réception : pas d'optimiste,
--- pas de désync possible.
 local function refreshIfOpen()
     SetTimeout(60, function()
         if exports['ravage-crews']:isCrewPageOpen() then
@@ -130,21 +118,64 @@ end
 RegisterNetEvent('hrs_base_building:setCrewC', function() refreshIfOpen() end)
 RegisterNetEvent('hrs_base_building:setInvitesC', function() refreshIfOpen() end)
 
--- ---------------------------------------------------------------------------
--- Réception des actions de la page : on déclenche simplement l'event serveur
--- réel. Le serveur renvoie setCrewC -> refreshIfOpen met la page à jour.
--- ---------------------------------------------------------------------------
 AddEventHandler('ravage-crews:action', function(event, args)
     if type(event) ~= 'string' or event == '' then return end
     args = args or {}
     TriggerServerEvent(event, table.unpack(args))
 end)
 
--- ---------------------------------------------------------------------------
--- Waypoint vers la base : on vise EN PRIORITÉ le totem de claim du chef
--- (propriétaire du crew), puis tout totem du crew, puis un prop du chef,
--- puis n'importe quel prop du crew. Pose ensuite le GPS dessus.
--- ---------------------------------------------------------------------------
+AddEventHandler('ravage-crews:requestStocks', function()
+    TriggerServerEvent('ravage-crews:requestStocks')
+end)
+
+RegisterNetEvent('ravage-crews:stocksResult', function(data, err)
+    if exports['ravage-crews']:isCrewPageOpen() then
+        exports['ravage-crews']:setStocks(data, err)
+    end
+end)
+
+AddEventHandler('ravage-crews:requestChests', function()
+    TriggerServerEvent('ravage-crews:requestChests')
+end)
+
+RegisterNetEvent('ravage-crews:chestsResult', function(data, err)
+    if exports['ravage-crews']:isCrewPageOpen() then
+        exports['ravage-crews']:setChests(data, err)
+    end
+end)
+
+AddEventHandler('ravage-crews:ping', function(x, y, z)
+    if not (x and y) then return end
+    x = x + 0.0; y = y + 0.0
+
+    exports['ravage-crews']:closeCrewPage()
+    SetNewWaypoint(x, y)
+    if ShowNotification then ShowNotification("Coffre désigné (flèche pendant 5 s).") end
+
+    CreateThread(function()
+        local baseZ = z and (z + 0.0) or nil
+        if not baseZ then
+            local found, gz = GetGroundZFor_3dCoord(x, y, 1000.0, false)
+            baseZ = (found and gz) or 0.0
+        end
+        local endTime = GetGameTimer() + 5000
+        while GetGameTimer() < endTime do
+            DrawMarker(
+                2,
+                x, y, baseZ + 1.4,
+                0.0, 0.0, 0.0,
+                180.0, 0.0, 0.0,
+                0.55, 0.55, 0.55,
+                200, 180, 140, 200,
+                true,
+                false,
+                2, false, nil, nil, false
+            )
+            Wait(0)
+        end
+    end)
+end)
+
 AddEventHandler('ravage-crews:waypoint', function()
     exports['ravage-crews']:closeCrewPage()
 
@@ -153,7 +184,6 @@ AddEventHandler('ravage-crews:waypoint', function()
         return
     end
 
-    -- Récupère les props de façon fiable (export dédié, sinon global)
     local allProps
     local ok, res = pcall(function() return exports['hrs_base_building']:getBaseBuildingProps() end)
     if ok and res then allProps = res else allProps = props end
@@ -203,4 +233,77 @@ AddEventHandler('ravage-crews:waypoint', function()
 
     SetNewWaypoint(coords.x, coords.y)
     if ShowNotification then ShowNotification("Itinéraire défini vers le totem du crew.") end
+end)
+
+-- ===========================================================================
+--  Nom flottant au-dessus des coffres nommés
+-- ===========================================================================
+local chestNames = {}
+
+local function Draw3DTextChest(x, y, z, text)
+    local onScreen, sx, sy = World3dToScreen2d(x, y, z)
+    if not onScreen then return end
+    local cam = GetGameplayCamCoords()
+    local dist = #(cam - vector3(x, y, z))
+    local fov = (1.0 / GetGameplayCamFov()) * 100.0
+    local scale = (1.0 / dist) * 2.0 * fov * 0.30
+
+    SetTextScale(0.0, scale)
+    SetTextFont(4)
+    SetTextProportional(true)
+    SetTextColour(200, 180, 140, 220)
+    SetTextDropshadow(0, 0, 0, 0, 255)
+    SetTextEdge(1, 0, 0, 0, 180)
+    SetTextDropShadow()
+    SetTextOutline()
+    SetTextCentre(true)
+    SetTextEntry("STRING")
+    AddTextComponentString("[ " .. text .. " ]")
+    DrawText(sx, sy)
+end
+
+RegisterNetEvent('ravage-crews:chestNameSync', function(propId, name, x, y, z, owner)
+    propId = tonumber(propId)
+    if not propId then return end
+    if name and name ~= false and name ~= "" then
+        chestNames[propId] = { coords = vector3(x + 0.0, y + 0.0, z + 0.0), name = name, identifier = owner }
+    else
+        chestNames[propId] = nil
+    end
+end)
+
+RegisterNetEvent('ravage-crews:allChestNames', function(list)
+    chestNames = {}
+    if type(list) == 'table' then
+        for _, c in ipairs(list) do
+            chestNames[c.id] = { coords = vector3(c.x + 0.0, c.y + 0.0, c.z + 0.0), name = c.name, identifier = c.identifier }
+        end
+    end
+end)
+
+CreateThread(function()
+    Wait(4000)
+    TriggerServerEvent('ravage-crews:requestAllChestNames')
+end)
+
+RegisterNetEvent('hrs_base_building:juststarted', function()
+    SetTimeout(3000, function() TriggerServerEvent('ravage-crews:requestAllChestNames') end)
+end)
+
+CreateThread(function()
+    while true do
+        local wait = 700
+        if next(chestNames) and identifier then
+            local pc = GetEntityCoords(PlayerPedId())
+            local drew = false
+            for propId, c in pairs(chestNames) do
+                if #(pc - c.coords) < 9.0 and hasPermissionVeh(identifier, c.identifier) then
+                    Draw3DTextChest(c.coords.x, c.coords.y, c.coords.z + 0.85, c.name)
+                    drew = true
+                end
+            end
+            if drew then wait = 0 end
+        end
+        Wait(wait)
+    end
 end)

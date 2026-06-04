@@ -13,6 +13,13 @@ let crew = null;
 let activeTab = 'membres';
 let modalOk = null;
 let expanded = new Set(); // membres dépliés (mémorisé entre refresh)
+let stocks = null;        // récap des coffres { items:[], total }
+let stocksErr = null;
+let stocksLoading = false;
+let chests = null;        // accès coffres [{id,label,x,y,denied:[]}]
+let chestsErr = null;
+let chestsLoading = false;
+let chestExpanded = new Set();
 
 /* ---------------------------- helpers ---------------------------- */
 function post(name, body) {
@@ -38,7 +45,11 @@ function el(tag, cls, txt) {
 /* ---------------------------- open / close ---------------------------- */
 function openCrew(payload) {
     crew = payload || {};
+    stocks = null; stocksErr = null; stocksLoading = false;
+    chests = null; chestsErr = null; chestsLoading = false;
     if (activeTab === 'inviter' && !crew.canInvite) activeTab = 'membres';
+    if (activeTab === 'coffres' && !crew.canStocks) activeTab = 'membres';
+    if (activeTab === 'acces' && !crew.canChestAcl) activeTab = 'membres';
     render();
     document.getElementById('crew-overlay').classList.remove('hidden');
 }
@@ -46,6 +57,8 @@ function updateCrew(payload) {
     if (document.getElementById('crew-overlay').classList.contains('hidden')) return;
     crew = payload || {};
     if (activeTab === 'inviter' && !crew.canInvite) activeTab = 'membres';
+    if (activeTab === 'coffres' && !crew.canStocks) activeTab = 'membres';
+    if (activeTab === 'acces' && !crew.canChestAcl) activeTab = 'membres';
     render();
 }
 function closeCrew() {
@@ -117,12 +130,16 @@ function render() {
     const tabs = el('div'); tabs.id = 'crew-tabs';
     tabs.appendChild(makeTab('membres', 'Membres', (crew.crew.members||[]).length));
     if (crew.canInvite) tabs.appendChild(makeTab('inviter', 'Inviter', (crew.nearbyPlayers||[]).length));
+    if (crew.canStocks) tabs.appendChild(makeTab('coffres', 'Coffres', stocks ? stocks.items.length : ''));
+    if (crew.canChestAcl) tabs.appendChild(makeTab('acces', 'Accès', chests ? chests.length : ''));
     const content = el('div'); content.id = 'crew-content';
     main.append(tabs, content);
 
     body.append(side, main);
 
-    if (activeTab === 'inviter' && crew.canInvite) renderInvite(content);
+    if (activeTab === 'acces' && crew.canChestAcl) renderAccess(content);
+    else if (activeTab === 'coffres' && crew.canStocks) renderStocks(content);
+    else if (activeTab === 'inviter' && crew.canInvite) renderInvite(content);
     else renderMembers(content);
 }
 
@@ -310,7 +327,199 @@ function renderInvite(content) {
     content.appendChild(list);
 }
 
-/* ---- no crew ---- */
+/* ---- stocks tab ---- */
+function loadStocks() {
+    stocks = null; stocksErr = null; stocksLoading = true;
+    post('crewStocks', {});
+    if (activeTab === 'coffres') render();
+}
+
+function renderStocks(content) {
+    // Première entrée dans l'onglet -> on déclenche le chargement
+    if (stocks === null && stocksErr === null && !stocksLoading) {
+        loadStocks();
+        return;
+    }
+
+    const headRow = el('div', 'stocks-head');
+    headRow.appendChild(el('div', 'section-title', 'Stocks de la base'));
+    const refresh = el('button', 'btn', 'Actualiser');
+    refresh.style.flex = 'none';
+    refresh.onclick = () => loadStocks();
+    headRow.appendChild(refresh);
+    content.appendChild(headRow);
+
+    if (stocksLoading) {
+        content.appendChild(emptyState('⟳', 'Analyse en cours', 'Lecture des coffres et stockpiles de la zone…'));
+        return;
+    }
+
+    if (stocksErr) {
+        const msg = {
+            no_perm: ["⛔", "Accès refusé", "Vous n'avez pas l'accréditation pour consulter les stocks."],
+            no_base: ["⚑", "Aucune base", "Aucun totem de claim trouvé pour votre crew."],
+            no_crew: ["✖", "Aucun crew", "Vous n'êtes dans aucun crew."]
+        }[stocksErr] || ["✖", "Erreur", "Impossible de récupérer les stocks."];
+        content.appendChild(emptyState(msg[0], msg[1], msg[2]));
+        return;
+    }
+
+    const items = (stocks && stocks.items) || [];
+    if (items.length === 0) {
+        content.appendChild(emptyState('▢', 'Coffres vides', 'Aucun item dans les coffres de la zone de base.'));
+        return;
+    }
+
+    // Bandeau total
+    const summary = el('div', 'stocks-summary');
+    summary.innerHTML = `<span>${items.length} type${items.length > 1 ? 's' : ''} d'objets</span><span>${(stocks.total || 0).toLocaleString('fr-FR')} unités</span>`;
+    content.appendChild(summary);
+
+    const grid = el('div', 'stocks-grid');
+    items.forEach((it, i) => {
+        const row = el('div', 'stock-row');
+        row.style.animationDelay = (Math.min(i, 20) * 0.02) + 's';
+        row.appendChild(el('div', 'stock-name', it.label || it.name));
+        row.appendChild(el('div', 'stock-count', 'x' + (it.count || 0).toLocaleString('fr-FR')));
+        grid.appendChild(row);
+    });
+    content.appendChild(grid);
+}
+
+/* ---- access tab (ACL par coffre) ---- */
+function loadChests() {
+    chests = null; chestsErr = null; chestsLoading = true;
+    post('crewChests', {});
+    if (activeTab === 'acces') render();
+}
+
+function renderAccess(content) {
+    if (chests === null && chestsErr === null && !chestsLoading) {
+        loadChests();
+        return;
+    }
+
+    const headRow = el('div', 'stocks-head');
+    headRow.appendChild(el('div', 'section-title', 'Accès aux coffres'));
+    const refresh = el('button', 'btn', 'Actualiser');
+    refresh.style.flex = 'none';
+    refresh.onclick = () => loadChests();
+    headRow.appendChild(refresh);
+    content.appendChild(headRow);
+
+    if (chestsLoading) {
+        content.appendChild(emptyState('⟳', 'Chargement', 'Recherche des coffres de la zone…'));
+        return;
+    }
+    if (chestsErr) {
+        const msg = {
+            no_perm: ["⛔", "Accès refusé", "Vous n'avez pas l'accréditation pour gérer l'accès des coffres."],
+            no_base: ["⚑", "Aucune base", "Aucun totem de claim trouvé pour votre crew."],
+            no_crew: ["✖", "Aucun crew", "Vous n'êtes dans aucun crew."]
+        }[chestsErr] || ["✖", "Erreur", "Impossible de récupérer les coffres."];
+        content.appendChild(emptyState(msg[0], msg[1], msg[2]));
+        return;
+    }
+    if (!chests || chests.length === 0) {
+        content.appendChild(emptyState('▢', 'Aucun coffre', 'Aucun coffre dans la zone de base.'));
+        return;
+    }
+
+    content.appendChild(el('div', 'access-hint', 'Coffre sans réglage = ouvert à tout le crew. Décochez un membre pour lui bloquer ce coffre.'));
+
+    const grid = el('div', 'member-grid');
+    chests.forEach((c, i) => grid.appendChild(buildChestCard(c, i)));
+    content.appendChild(grid);
+}
+
+function buildChestCard(c, i) {
+    const card = el('div', 'member-card');
+    card.style.animationDelay = (Math.min(i, 20) * 0.03) + 's';
+
+    const deniedSet = new Set(c.denied || []);
+    const members = (crew.crew.members || []);
+
+    // head (cliquable)
+    const head = el('div', 'member-head clickable');
+    head.appendChild(el('div', 'member-avatar', '▤'));
+    const info = el('div', 'member-info');
+    info.appendChild(el('div', 'member-name', c.name || c.label || ('Coffre #' + c.id)));
+    const badges = el('div', 'member-badges');
+    badges.appendChild(el('span', 'badge', '#' + c.id));
+    if (c.name && c.label) badges.appendChild(el('span', 'badge', c.label));
+    if (deniedSet.size > 0) badges.appendChild(el('span', 'badge danger-badge', deniedSet.size + ' bloqué' + (deniedSet.size > 1 ? 's' : '')));
+    info.appendChild(badges);
+    head.appendChild(info);
+    const meta = el('div', 'member-meta');
+    const chev = el('div', 'member-chevron', '▸');
+    meta.appendChild(chev);
+    head.appendChild(meta);
+    card.appendChild(head);
+
+    // body
+    const body = el('div', 'member-body');
+    const permsWrap = el('div', 'member-perms');
+    permsWrap.appendChild(el('div', 'perms-title', 'Membres autorisés'));
+    const pgrid = el('div', 'perms-grid');
+
+    members.forEach(m => {
+        const isChief = m.isOwner;
+        const allowed = isChief ? true : !deniedSet.has(m.id);
+        const t = el('div', 'perm-toggle' + (allowed ? ' on' : '') + (isChief ? ' disabled' : ''));
+        t.dataset.mid = m.id;
+        if (isChief) t.dataset.chief = '1';
+        const box = el('div', 'perm-box'); box.textContent = allowed ? '✓' : '';
+        t.appendChild(box);
+        const lbl = el('div', 'perm-label', m.name + (isChief ? ' (chef)' : (m.isMe ? ' (vous)' : '')));
+        t.appendChild(lbl);
+        if (!isChief) {
+            t.onclick = () => {
+                t.classList.toggle('on');
+                box.textContent = t.classList.contains('on') ? '✓' : '';
+            };
+        }
+        pgrid.appendChild(t);
+    });
+    permsWrap.appendChild(pgrid);
+    body.appendChild(permsWrap);
+
+    const acts = el('div', 'member-actions');
+    const save = el('button', 'btn success', 'Enregistrer');
+    save.onclick = () => {
+        const denied = [];
+        pgrid.querySelectorAll('.perm-toggle').forEach(t => {
+            if (t.dataset.chief) return;
+            if (!t.classList.contains('on')) denied.push(t.dataset.mid);
+        });
+        post('crewSetAcl', { propId: c.id, denied: denied });
+        toast('Accès du coffre mis à jour', 'ok');
+        setTimeout(loadChests, 400);
+    };
+    acts.appendChild(save);
+
+    const loc = el('button', 'btn', 'Localiser');
+    loc.onclick = () => post('crewPing', { x: c.x, y: c.y, z: c.z });
+    acts.appendChild(loc);
+
+    const ren = el('button', 'btn', 'Renommer');
+    ren.onclick = () => promptChestName(c);
+    acts.appendChild(ren);
+
+    body.appendChild(acts);
+    card.appendChild(body);
+
+    // collapse
+    const setState = (open) => {
+        card.classList.toggle('collapsed', !open);
+        chev.textContent = open ? '▾' : '▸';
+        if (open) chestExpanded.add(c.id); else chestExpanded.delete(c.id);
+    };
+    setState(chestExpanded.has(c.id));
+    head.onclick = () => setState(card.classList.contains('collapsed'));
+
+    return card;
+}
+
 function renderNoCrew(body) {
     const main = el('main'); main.id = 'crew-main'; main.style.width = '100%';
     const content = el('div'); content.id = 'crew-content';
@@ -389,6 +598,27 @@ function promptRename() {
     document.getElementById('crew-modal').classList.remove('hidden');
     setTimeout(() => input.focus(), 50);
 }
+function promptChestName(chest) {
+    document.getElementById('crew-modal-title').textContent = 'Renommer le coffre';
+    document.getElementById('crew-modal-text').textContent = 'Nom affiché au-dessus du coffre (vide = retirer le nom).';
+    document.getElementById('crew-modal-input-wrap').classList.remove('hidden');
+    const input = document.getElementById('crew-modal-input');
+    input.value = chest.name || '';
+    input.setAttribute('maxlength', '32');
+    const ok = document.getElementById('crew-modal-ok');
+    ok.textContent = 'Enregistrer';
+    ok.className = 'm-btn confirm';
+    modalOk = () => {
+        closeModal();
+        post('crewSetChestName', { propId: chest.id, name: input.value.trim() });
+        toast('Coffre renommé', 'ok');
+        setTimeout(loadChests, 700);
+    };
+    ok.onclick = modalOk;
+    document.getElementById('crew-modal').classList.remove('hidden');
+    setTimeout(() => input.focus(), 50);
+}
+
 function promptCreate() {
     document.getElementById('crew-modal-title').textContent = 'Créer un crew';
     document.getElementById('crew-modal-text').textContent = 'Choisissez le nom de votre crew.';
@@ -436,6 +666,18 @@ window.addEventListener('message', (e) => {
     if (d.action === 'openCrew')   openCrew(d.data || {});
     if (d.action === 'updateCrew') updateCrew(d.data || {});
     if (d.action === 'closeCrew')  document.getElementById('crew-overlay').classList.add('hidden');
+    if (d.action === 'stocks') {
+        stocksLoading = false;
+        stocksErr = d.err || null;
+        stocks = d.err ? null : (d.data || { items: [], total: 0 });
+        if (activeTab === 'coffres') render();
+    }
+    if (d.action === 'chests') {
+        chestsLoading = false;
+        chestsErr = d.err || null;
+        chests = d.err ? null : ((d.data && d.data.chests) || []);
+        if (activeTab === 'acces') render();
+    }
 });
 
 document.addEventListener('keydown', (e) => {
