@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RAVAGE - Crew</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Rajdhani:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="scanlines"></div>
+
+    <!-- =================== PAGE CREW =================== -->
+    <div id="crew-overlay" class="hidden">
+        <div id="crew-window">
+            <span class="bracket br-tl"></span>
+            <span class="bracket br-tr"></span>
+            <span class="bracket br-bl"></span>
+            <span class="bracket br-br"></span>
+
+            <div id="crew-topbar">
+                <div class="topbar-left">
+                    <div class="topbar-icon">&#9635;</div>
+                    <div class="topbar-text">
+                        <span id="crew-window-title">GESTION DU CREW</span>
+                        <span id="crew-window-sub">RAVAGE &mdash; SYST&Egrave;ME DE CREW</span>
+                    </div>
+                </div>
+                <button id="crew-close" onclick="closeCrew()">&#10005;</button>
+            </div>
+
+            <div id="crew-body"></div>
+        </div>
+
+        <div id="crew-modal" class="hidden">
+            <div id="crew-modal-box">
+                <span class="bracket br-tl"></span>
+                <span class="bracket br-tr"></span>
+                <span class="bracket br-bl"></span>
+                <span class="bracket br-br"></span>
+                <div id="crew-modal-title">CONFIRMATION</div>
+                <div id="crew-modal-text"></div>
+                <div id="crew-modal-input-wrap" class="hidden">
+                    <input id="crew-modal-input" type="text" maxlength="32" placeholder="Nom du crew">
+                </div>
+                <div id="crew-modal-actions">
+                    <button class="m-btn cancel" onclick="closeModal()">ANNULER</button>
+                    <button class="m-btn confirm" id="crew-modal-ok">CONFIRMER</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="crew-toast" class="hidden"></div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>

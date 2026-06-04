@@ -1,0 +1,3 @@
+-- ravage-crews (server)
+-- Ce resource est uniquement l'interface NUI de gestion du crew.
+-- Toute la logique crew (DB, permissions, invitations) reste dans hrs_base_building.
